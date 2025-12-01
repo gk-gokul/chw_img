@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Champagne Pop - HTML5 Canvas</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background: #05060a;
+      font-family: system-ui, sans-serif;
+      color: #eee;
+    }
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    #container {
+      width: min(480px, 100vw);
+      height: min(720px, 100vh);
+      position: relative;
+    }
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      background: radial-gradient(circle at 50% 0%, #222 0%, #000 70%);
+      border-radius: 16px;
+      box-shadow: 0 24px 80px rgba(0,0,0,0.8);
+    }
+    #hint {
+      position: absolute;
+      left: 50%;
+      bottom: 10px;
+      transform: translateX(-50%);
+      font-size: 12px;
+      opacity: 0.7;
+      pointer-events: none;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.9);
+    }
+  </style>
+</head>
+<body>
+  <div id="container">
+    <canvas id="scene"></canvas>
+    <div id="hint">Click to pop again 🍾</div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById("scene");
+    const ctx = canvas.getContext("2d");
+
+    let sceneW = 0;
+    let sceneH = 0;
+    let dpr = window.devicePixelRatio || 1;
+
+    function resize() {
+      const rect = canvas.getBoundingClientRect();
+      dpr = window.devicePixelRatio || 1;
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // draw in CSS pixels
+      sceneW = rect.width;
+      sceneH = rect.height;
+      initScene();
+    }
+
+    window.addEventListener("resize", resize);
+
+    // --- Scene objects -------------------------------------------------------
+    const gravity = 900; // px/s^2
+    const particles = [];
+    let cork = null;
+    let popped = false;
+    let popStartTime = 0;
+    let lastTime = 0;
+    let sprayDuration = 0;
+
+    const bottle = {
+      x: 0,
+      y: 0,
+      height: 0,
+      neckWidth: 0,
+      bodyWidth: 0
+    };
+
+    function initScene() {
+      const h = sceneH * 0.65;
+      bottle.height = h;
+      bottle.bodyWidth = h * 0.32;
+      bottle.neckWidth = h * 0.12;
+      bottle.x = sceneW / 2;
+      bottle.y = sceneH * 0.9;
+    }
+
+    function resetPop() {
+      particles.length = 0;
+      cork = null;
+      popped = false;
+      sprayDuration = 0;
+      popStartTime = 0;
+    }
+
+    function triggerPop(time) {
+      if (popped) return;
+      popped = true;
+      popStartTime = time;
+      sprayDuration = 0.7; // seconds
+
+      // Create cork
+      const neckTop = getNeckTopPosition();
+      cork = {
+        x: neckTop.x,
+        y: neckTop.y - 4,
+        vx: (Math.random() * 80 - 40),
+        vy: - (500 + Math.random() * 150),
+        rotation: Math.random() * Math.PI * 2,
+        vr: (Math.random() * 6 - 3),
+        radius: bottle.neckWidth * 0.45,
+        active: true
+      };
+
+      // Initial burst foam particles
+      createFoamBurst(neckTop.x, neckTop.y);
+      createMistBurst(neckTop.x, neckTop.y);
+      createSparkles(neckTop.x, neckTop.y - 10);
+    }
+
+    function getNeckTopPosition() {
+      const neckHeight = bottle.height * 0.26;
+      const neckTopY = bottle.y - bottle.height + neckHeight * 0.1;
+      return {
+        x: bottle.x,
+        y: neckTopY
+      };
+    }
+
+    // --- Particles -----------------------------------------------------------
+    function createFoamBurst(x, y) {
+      const count = 180;
+      for (let i = 0; i < count; i++) {
+        const angle = -Math.PI / 2 + (Math.random() - 0.5) * 0.8;
+        const speed = 200 + Math.random() * 250;
+        particles.push({
+          type: "foam",
+          x,
+          y,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          life: 0,
+          maxLife: 1.0 + Math.random() * 0.6,
+          radius: 3 + Math.random() * 6
+        });
+      }
+    }
+
+    function createMistBurst(x, y) {
+      const count = 220;
+      for (let i = 0; i < count; i++) {
+        const angle = -Math.PI / 2 + (Math.random() - 0.5) * 0.6;
+        const speed = 250 + Math.random() * 350;
+        particles.push({
+          type: "mist",
+          x,
+          y,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          life: 0,
+          maxLife: 0.8 + Math.random() * 0.7,
+          radius: 1 + Math.random() * 2
+        });
+      }
+    }
+
+    function createSprayContinuous(dt) {
+      if (!popped || sprayDuration <= 0) return;
+      const neckTop = getNeckTopPosition();
+      const rate = 900; // particles per second
+      const count = Math.floor(rate * dt);
+
+      for (let i = 0; i < count; i++) {
+        const t = Math.random();
+        const angle = -Math.PI / 2 + (Math.random() - 0.5) * 0.5;
+        const speed = 350 + Math.random() * 250;
+        const type = t < 0.4 ? "foam" : "mist";
+        particles.push({
+          type,
+          x: neckTop.x + (Math.random() - 0.5) * 4,
+          y: neckTop.y + (Math.random() - 0.5) * 4,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          life: 0,
+          maxLife: type === "foam"
+            ? 0.7 + Math.random() * 0.7
+            : 0.5 + Math.random() * 0.5,
+          radius: type === "foam"
+            ? 2 + Math.random() * 4
+            : 0.8 + Math.random() * 1.4
+        });
+      }
+      sprayDuration -= dt;
+    }
+
+    function createSparkles(x, y) {
+      const count = 40;
+      for (let i = 0; i < count; i++) {
+        const angle = Math.random() * Math.PI - Math.PI; // mostly upper half
+        const speed = 120 + Math.random() * 160;
+        particles.push({
+          type: "sparkle",
+          x,
+          y,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed - 30,
+          life: 0,
+          maxLife: 0.9 + Math.random() * 0.6,
+          radius: 1.5 + Math.random() * 2.5
+        });
+      }
+    }
+
+    function updateParticles(dt) {
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.life += dt;
+        if (p.life > p.maxLife) {
+          particles.splice(i, 1);
+          continue;
+        }
+
+        // Physics
+        if (p.type === "foam") {
+          p.vy += gravity * 0.25 * dt;
+        } else if (p.type === "mist") {
+          p.vy += gravity * 0.5 * dt;
+        } else if (p.type === "sparkle") {
+          p.vy += gravity * 0.65 * dt;
+        }
+
+        // Slight drag
+        p.vx *= (p.type === "mist") ? 0.995 : 0.99;
+
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+
+        // Floor collision for foam to create a little puddle effect
+        if (p.type === "foam" && p.y > bottle.y) {
+          p.y = bottle.y;
+          p.vy *= -0.15;
+          p.vx *= 0.4;
+        }
+      }
+    }
+
+    // --- Cork ----------------------------------------------------------------
+    function updateCork(dt) {
+      if (!cork || !cork.active) return;
+      cork.vy += gravity * 0.7 * dt;
+      cork.x += cork.vx * dt;
+      cork.y += cork.vy * dt;
+      cork.rotation += cork.vr * dt;
+
+      // Mark inactive once it leaves screen
+      if (cork.y - cork.radius > sceneH + 50 ||
+          cork.x + cork.radius < -50 ||
+          cork.x - cork.radius > sceneW + 50) {
+        cork.active = false;
+      }
+    }
+
+    // --- Drawing -------------------------------------------------------------
+    function drawBackground() {
+      const grd = ctx.createRadialGradient(
+        sceneW / 2, sceneH * 0.2, sceneW * 0.1,
+        sceneW / 2, sceneH * 0.6, sceneW * 0.7
+      );
+      grd.addColorStop(0, "#22242b");
+      grd.addColorStop(1, "#05060a");
+      ctx.fillStyle = grd;
+      ctx.fillRect(0, 0, sceneW, sceneH);
+
+      // Subtle vignette
+      const vg = ctx.createRadialGradient(
+        sceneW / 2, sceneH / 2, sceneW * 0.2,
+        sceneW / 2, sceneH / 2, sceneW * 0.8
+      );
+      vg.addColorStop(0, "rgba(0,0,0,0)");
+      vg.addColorStop(1, "rgba(0,0,0,0.7)");
+      ctx.fillStyle = vg;
+      ctx.fillRect(0, 0, sceneW, sceneH);
+    }
+
+    function drawBottle() {
+      const { x, y, height, bodyWidth, neckWidth } = bottle;
+      const baseRadius = bodyWidth * 0.55;
+      const neckHeight = height * 0.26;
+      const shoulderHeight = height * 0.18;
+      const bodyHeight = height - neckHeight - shoulderHeight;
+
+      ctx.save();
+      ctx.translate(x, y);
+
+      // Glass body
+      const bodyTopY = -bodyHeight - neckHeight;
+      const bodyBottomY = 0;
+
+      const grdGlass = ctx.createLinearGradient(0, bodyTopY, 0, bodyBottomY);
+      grdGlass.addColorStop(0, "#1d4c2d");
+      grdGlass.addColorStop(0.3, "#0c3320");
+      grdGlass.addColorStop(1, "#04150e");
+
+      ctx.fillStyle = grdGlass;
+      ctx.beginPath();
+      ctx.moveTo(-bodyWidth / 2, bodyBottomY);
+      ctx.quadraticCurveTo(-bodyWidth * 0.7, bodyBottomY - bodyHeight * 0.3,
+                           -baseRadius, bodyTopY + shoulderHeight);
+      ctx.quadraticCurveTo(-neckWidth, bodyTopY,
+                            0, bodyTopY);
+      ctx.quadraticCurveTo(neckWidth, bodyTopY,
+                           baseRadius, bodyTopY + shoulderHeight);
+      ctx.quadraticCurveTo(bodyWidth * 0.7, bodyBottomY - bodyHeight * 0.3,
+                           bodyWidth / 2, bodyBottomY);
+      ctx.closePath();
+      ctx.fill();
+
+      // Glass highlight
+      ctx.beginPath();
+      const highlightWidth = bodyWidth * 0.18;
+      ctx.moveTo(-highlightWidth * 0.3, bodyTopY);
+      ctx.quadraticCurveTo(
+        -highlightWidth, (bodyTopY + bodyBottomY) * 0.3,
+        -highlightWidth * 0.1, bodyBottomY
+      );
+      ctx.strokeStyle = "rgba(255,255,255,0.18)";
+      ctx.lineWidth = highlightWidth * 0.65;
+      ctx.stroke();
+
+      // Label
+      const labelHeight = bodyHeight * 0.32;
+      const labelWidth = bodyWidth * 0.7;
+      const labelTop = bodyBottomY - bodyHeight * 0.65;
+      const labelLeft = -labelWidth / 2;
+      const labelRadius = 10;
+
+      const labelGradient = ctx.createLinearGradient(0, labelTop, 0, labelTop + labelHeight);
+      labelGradient.addColorStop(0, "#f6f1dc");
+      labelGradient.addColorStop(1, "#e8d7ae");
+
+      roundedRect(ctx, labelLeft, labelTop, labelWidth, labelHeight, labelRadius);
+      ctx.fillStyle = labelGradient;
+      ctx.fill();
+
+      ctx.strokeStyle = "rgba(80,40,10,0.8)";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      // Label text-ish (simple lines & dot to avoid fonts)
+      ctx.save();
+      ctx.translate(0, labelTop + labelHeight * 0.55);
+      ctx.strokeStyle = "rgba(80,40,10,0.8)";
+      ctx.lineWidth = 1.2;
+      ctx.lineCap = "round";
+
+      // "Script" line
+      ctx.beginPath();
+      ctx.moveTo(-labelWidth * 0.3, 0);
+      ctx.quadraticCurveTo(-labelWidth * 0.1, -labelHeight * 0.08,
+                            0, 0);
+      ctx.quadraticCurveTo(labelWidth * 0.12, labelHeight * 0.1,
+                           labelWidth * 0.3, 0);
+      ctx.stroke();
+
+      // Small dot
+      ctx.beginPath();
+      ctx.arc(labelWidth * 0.1, -labelHeight * 0.18, 2.4, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(80,40,10,0.85)";
+      ctx.fill();
+      ctx.restore();
+
+      // Foil
+      const foilHeight = neckHeight * 0.7;
+      const foilTop = bodyTopY - neckHeight + 2;
+
+      const foilGradient = ctx.createLinearGradient(0, foilTop, 0, foilTop + foilHeight);
+      foilGradient.addColorStop(0, "#f9e29a");
+      foilGradient.addColorStop(0.5, "#f5cf5c");
+      foilGradient.addColorStop(1, "#c49334");
+
+      roundedRect(ctx, -neckWidth * 0.9, foilTop, neckWidth * 1.8, foilHeight, 6);
+      ctx.fillStyle = foilGradient;
+      ctx.fill();
+
+      ctx.strokeStyle = "rgba(120,80,20,0.8)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // Small foil texture lines
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(-neckWidth * 0.9, foilTop, neckWidth * 1.8, foilHeight);
+      ctx.clip();
+      ctx.strokeStyle = "rgba(255,255,255,0.14)";
+      ctx.lineWidth = 0.6;
+      for (let i = -neckWidth; i <= neckWidth; i += 3) {
+        ctx.beginPath();
+        ctx.moveTo(i, foilTop);
+        ctx.lineTo(i + 10, foilTop + foilHeight);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // Neck (glass above foil)
+      ctx.beginPath();
+      const neckTop = foilTop - neckHeight * 0.4;
+      ctx.moveTo(-neckWidth / 2, foilTop);
+      ctx.lineTo(-neckWidth / 2, neckTop);
+      ctx.lineTo(neckWidth / 2, neckTop);
+      ctx.lineTo(neckWidth / 2, foilTop);
+      ctx.closePath();
+
+      const neckGradient = ctx.createLinearGradient(0, neckTop, 0, foilTop);
+      neckGradient.addColorStop(0, "#0e2617");
+      neckGradient.addColorStop(1, "#031009");
+      ctx.fillStyle = neckGradient;
+      ctx.fill();
+
+      // Neck rim
+      const rimHeight = 6;
+      roundedRect(ctx, -neckWidth * 0.6, neckTop - rimHeight, neckWidth * 1.2, rimHeight, 3);
+      const rimGradient = ctx.createLinearGradient(0, neckTop - rimHeight,
+                                                   0, neckTop);
+      rimGradient.addColorStop(0, "#f6e3aa");
+      rimGradient.addColorStop(1, "#cfa84d");
+      ctx.fillStyle = rimGradient;
+      ctx.fill();
+
+      // Base shadow on "floor"
+      ctx.beginPath();
+      ctx.ellipse(0, 8, baseRadius * 1.2, baseRadius * 0.45, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(0,0,0,0.8)";
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+    function roundedRect(ctx, x, y, w, h, r) {
+      const radius = Math.min(r, w / 2, h / 2);
+      ctx.beginPath();
+      ctx.moveTo(x + radius, y);
+      ctx.lineTo(x + w - radius, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
+      ctx.lineTo(x + w, y + h - radius);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+      ctx.lineTo(x + radius, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
+      ctx.lineTo(x, y + radius);
+      ctx.quadraticCurveTo(x, y, x + radius, y);
+      ctx.closePath();
+    }
+
+    function drawParticles() {
+      for (const p of particles) {
+        const t = p.life / p.maxLife;
+        let alpha;
+        let color;
+
+        if (p.type === "foam") {
+          alpha = 1 - t * 0.9;
+          color = `rgba(255, 255, 255, ${alpha.toFixed(3)})`;
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (p.type === "mist") {
+          alpha = (1 - t) * 0.8;
+          const grad = ctx.createRadialGradient(
+            p.x, p.y, 0,
+            p.x, p.y, p.radius * 4
+          );
+          grad.addColorStop(0, `rgba(255,255,255,${alpha.toFixed(3)})`);
+          grad.addColorStop(1, "rgba(255,255,255,0)");
+          ctx.fillStyle = grad;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.radius * 4, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (p.type === "sparkle") {
+          alpha = (1 - t) * 0.9;
+          const g = ctx.createRadialGradient(
+            p.x, p.y, 0,
+            p.x, p.y, p.radius * 3
+          );
+          g.addColorStop(0, `rgba(255,255,200,${alpha.toFixed(3)})`);
+          g.addColorStop(0.4, `rgba(255,230,140,${(alpha*0.8).toFixed(3)})`);
+          g.addColorStop(1, "rgba(255,255,255,0)");
+          ctx.fillStyle = g;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.radius * 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+
+    function drawCork() {
+      if (!cork || !cork.active) return;
+      ctx.save();
+      ctx.translate(cork.x, cork.y);
+      ctx.rotate(cork.rotation);
+
+      const r = cork.radius;
+      const corkHeight = r * 1.9;
+      const bodyHeight = corkHeight * 0.6;
+
+      // Main body
+      const gradient = ctx.createLinearGradient(0, -corkHeight/2, 0, corkHeight/2);
+      gradient.addColorStop(0, "#c79b62");
+      gradient.addColorStop(0.5, "#a9743e");
+      gradient.addColorStop(1, "#8a5c32");
+
+      roundedRect(ctx, -r, -bodyHeight / 2, r * 2, bodyHeight, r * 0.6);
+      ctx.fillStyle = gradient;
+      ctx.fill();
+
+      // Head (slightly larger top)
+      ctx.beginPath();
+      ctx.ellipse(0, -bodyHeight / 2, r * 1.05, r * 0.75, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "#c79b62";
+      ctx.fill();
+
+      // Texture dots
+      ctx.fillStyle = "rgba(60,30,10,0.45)";
+      for (let i = 0; i < 12; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const radius = r * 0.7 * Math.random();
+        const px = Math.cos(angle) * radius * 0.6;
+        const py = Math.sin(angle) * radius * 0.8;
+        ctx.beginPath();
+        ctx.arc(px, py, 0.7 + Math.random() * 1.1, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.restore();
+    }
+
+    // --- Animation loop ------------------------------------------------------
+    function loop(timestamp) {
+      if (!lastTime) lastTime = timestamp;
+      const dt = Math.min((timestamp - lastTime) / 1000, 0.033); // clamp dt
+      lastTime = timestamp;
+
+      // Auto-pop after a short delay on first run
+      if (!popped && popStartTime === 0 && timestamp > 1000) {
+        triggerPop(timestamp / 1000);
+      }
+
+      if (popped) {
+        createSprayContinuous(dt);
+      }
+      updateParticles(dt);
+      updateCork(dt);
+
+      drawBackground();
+      drawBottle();
+      drawParticles();
+      drawCork();
+
+      requestAnimationFrame(loop);
+    }
+
+    // Click to replay
+    canvas.addEventListener("click", () => {
+      resetPop();
+      triggerPop(performance.now() / 1000);
+    });
+
+    // Init & start
+    resize();
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
